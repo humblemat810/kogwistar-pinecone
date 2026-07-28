@@ -8,3 +8,8 @@ services:
     ports:
       - "5080-5090:5080-5090"
 
+  test:
+    build: .
+    depends_on:
+      - pinecone
+    command: ["python", "-m", "pytest", "-q"]
