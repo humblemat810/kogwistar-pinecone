@@ -200,10 +200,14 @@ class PineconeBackend:
             kwargs["delete_all"] = True
         self.index.delete(**kwargs)
 
+    def call(self, collection_key: str, method: str, **kwargs: Any) -> Any:
+        if collection_key not in COLLECTIONS or method not in {"get", "query", "add", "upsert", "update", "delete"}:
+            raise ValueError(f"unsupported collection/method: {collection_key}.{method}")
+        return getattr(self, f"{collection_key}_{method}")(**kwargs)
+
     def __getattr__(self, name: str) -> Any:
         for key in COLLECTIONS:
             if name.startswith(key + "_") and name[len(key) + 1:] in {"get", "query", "add", "upsert", "update", "delete"}:
                 method = name[len(key) + 1:]
                 return lambda **kwargs: getattr(self, method)(key, **kwargs)
         raise AttributeError(name)
-
