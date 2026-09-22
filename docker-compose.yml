@@ -1,12 +1,15 @@
 services:
   pinecone:
-    image: ghcr.io/pinecone-io/pinecone-local:latest
+    image: ghcr.io/pinecone-io/pinecone-index:latest
     platform: linux/amd64
     environment:
-      PORT: 5080
-      PINECONE_HOST: localhost
+      PORT: 5081
+      INDEX_TYPE: serverless
+      VECTOR_TYPE: dense
+      DIMENSION: 3
+      METRIC: cosine
     ports:
-      - "5080-5090:5080-5090"
+      - "5081:5081"
 
   test:
     build: .

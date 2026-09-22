@@ -41,3 +41,51 @@ jobs:
           name: pytest-report-${{ matrix.python-version }}
           path: pytest-*.xml
           if-no-files-found: ignore
+
+  pinecone-local:
+    name: Pinecone Local integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start official Pinecone Local index emulator
+        run: |
+          docker run -d --name pinecone-local \
+            --platform linux/amd64 \
+            -e PORT=5081 \
+            -e INDEX_TYPE=serverless \
+            -e VECTOR_TYPE=dense \
+            -e DIMENSION=3 \
+            -e METRIC=cosine \
+            -p 5081:5081 \
+            ghcr.io/pinecone-io/pinecone-index:latest
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5081/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs pinecone-local
+          exit 1
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Run Pinecone Local integration contract
+        env:
+          PINECONE_API_KEY: pclocal
+          PINECONE_INDEX_HOST: http://127.0.0.1:5081
+        run: python -m pytest tests/test_integration.py -m integration -vv -ra --tb=long --junitxml=pytest-pinecone-local.xml
+      - name: Upload Pinecone Local test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-pinecone-local
+          path: pytest-pinecone-local.xml
+          if-no-files-found: ignore
+      - name: Show Pinecone Local logs on failure
+        if: failure()
+        run: docker logs pinecone-local
+      - name: Stop Pinecone Local
+        if: always()
+        run: docker rm -f pinecone-local

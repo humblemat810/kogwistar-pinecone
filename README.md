@@ -18,12 +18,15 @@ For Pinecone Local integration:
 
 ```powershell
 docker compose up -d pinecone
-$env:PINECONE_HOST = "http://127.0.0.1:5080"
+$env:PINECONE_INDEX_HOST = "http://127.0.0.1:5081"
 $env:PINECONE_API_KEY = "pclocal"
-# Create an index through the local control plane, then set PINECONE_INDEX_HOST.
 .\.venv\Scripts\python.exe -m pytest -m integration
 docker compose down
 ```
+
+The compose service uses Pinecone's official `pinecone-index` in-memory emulator
+(dense, cosine, dimension 3). CI starts the same emulator and fails when the
+real Pinecone SDK adapter contract fails. Data is intentionally non-persistent.
 
 Pinecone is an eventually-consistent projection here. `transaction()` is a
 no-op; authoritative graph/event state must remain in Kogwistar's transactional
