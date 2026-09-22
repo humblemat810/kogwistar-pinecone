@@ -29,9 +29,9 @@ jobs:
         if: matrix.is_pypy == false
       - run: python -m pip install --upgrade pip setuptools wheel pytest
         if: matrix.is_pypy
-      - run: python -m pip install -e . --no-deps
-        if: matrix.is_pypy
       - run: python -m pytest -q
         if: matrix.is_pypy == false
       - run: python -m pytest tests/test_pypy_compat.py -q -p no:cacheprovider
         if: matrix.is_pypy
+        env:
+          PYTHONPATH: src
