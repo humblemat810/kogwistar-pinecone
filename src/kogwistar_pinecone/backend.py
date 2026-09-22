@@ -158,7 +158,7 @@ class PineconeBackend:
         self._persistent = persistent
 
     @classmethod
-    def from_env(cls, *, index_host: str | None = None, dimension: int, prefix: str = "kogwistar") -> "PineconeBackend":
+    def from_env(cls, *, index_host: str | None = None, dimension: int, prefix: str = "kogwistar", engine: Any | None = None) -> "PineconeBackend":
         if Pinecone is None:
             raise RuntimeError("pinecone is unavailable on this interpreter; install provider dependencies on CPython")
         api_key = os.environ.get("PINECONE_API_KEY", "pclocal")
@@ -166,7 +166,7 @@ class PineconeBackend:
         if not host:
             raise ValueError("PINECONE_INDEX_HOST is required")
         scope = f"pinecone:host:{hashlib.sha256(host.encode()).hexdigest()[:16]}"
-        return cls(Pinecone(api_key=api_key).Index(host=host), dimension=dimension, prefix=prefix, storage_scope=scope, persistent=True)
+        return cls(Pinecone(api_key=api_key).Index(host=host), dimension=dimension, prefix=prefix, storage_scope=scope, persistent=True, engine=engine)
 
     def embedding_storage_scope(self) -> str:
         return self._storage_scope
