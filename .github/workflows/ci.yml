@@ -10,16 +10,26 @@ jobs:
         include:
           - python-version: "3.12"
             experimental: false
+            is_pypy: false
           - python-version: "3.13"
             experimental: false
+            is_pypy: false
           - python-version: "3.14"
             experimental: false
+            is_pypy: false
           - python-version: "pypy3.11"
             experimental: true
+            is_pypy: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e .[test]
+      - run: python -m pip install -e ".[test]"
+        if: matrix.is_pypy == false
+      - run: python -m pip install -e ".[test]"
+        if: matrix.is_pypy
       - run: python -m pytest -q
+        if: matrix.is_pypy == false
+      - run: python -m pytest tests/test_pypy_compat.py -q -p no:cacheprovider
+        if: matrix.is_pypy

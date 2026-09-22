@@ -7,7 +7,7 @@ name = "kogwistar-pinecone"
 version = "0.5.0"
 description = "Pinecone adapter exposing Kogwistar's Chroma-shaped storage contract"
 requires-python = ">=3.12"
-dependencies = ["pinecone>=7,<8"]
+dependencies = ["pinecone>=7,<8; implementation_name != 'pypy'"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

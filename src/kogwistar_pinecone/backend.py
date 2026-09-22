@@ -8,7 +8,10 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, AsyncIterator, Iterator, Mapping, Sequence
 
-from pinecone import Pinecone
+try:
+    from pinecone import Pinecone
+except ImportError:  # PyPy provider-free compatibility lane
+    Pinecone = None  # type: ignore[assignment]
 
 try:
     from kogwistar.engine_core.embedding_profile import EmbeddingStorageState
@@ -129,6 +132,8 @@ class PineconeBackend:
 
     @classmethod
     def from_env(cls, *, index_host: str | None = None, dimension: int, prefix: str = "kogwistar") -> "PineconeBackend":
+        if Pinecone is None:
+            raise RuntimeError("pinecone is unavailable on this interpreter; install provider dependencies on CPython")
         api_key = os.environ.get("PINECONE_API_KEY", "pclocal")
         host = index_host or os.environ.get("PINECONE_INDEX_HOST")
         if not host:
