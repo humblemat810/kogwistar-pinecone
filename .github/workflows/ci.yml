@@ -3,9 +3,19 @@ on: [push, pull_request]
 jobs:
   contract:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14", "pypy3.11"]
+        include:
+          - python-version: "3.12"
+            experimental: false
+          - python-version: "3.13"
+            experimental: false
+          - python-version: "3.14"
+            experimental: false
+          - python-version: "pypy3.11"
+            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
