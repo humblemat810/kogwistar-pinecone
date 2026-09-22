@@ -53,6 +53,20 @@ except ImportError:
     class TwoStageProjectionCapability:
         supports_two_stage: bool = False
         reason: str = "Pinecone adapter has no canonical event/revision promotion"
+        canonical_event_replay: bool = False
+        canonical_read: bool = False
+        stage1_strategy: str = "none"
+        stage1_metadata_query: bool = False
+        stage1_cleanup: bool = False
+        stage2_semantic_projection: bool = False
+        revision_gated_promotion: bool = False
+        semantic_readiness_gate: bool = False
+        delete_reconciliation: bool = False
+        atomic_promotion: str = "eventual_reconcile"
+        def missing_contracts(self) -> tuple[str, ...]:
+            return () if self.is_complete() else ("two_stage_projection",)
+        def is_complete(self) -> bool:
+            return all((self.supports_two_stage, self.canonical_event_replay, self.canonical_read, self.stage2_semantic_projection, self.revision_gated_promotion, self.semantic_readiness_gate, self.delete_reconciliation))
 
 
 def _awaitable(value: Any) -> Any:
@@ -118,15 +132,28 @@ class PineconeBackend:
     supports_transactions = False
     consistency = "eventual"
 
-    def __init__(self, index: Any, *, dimension: int, prefix: str = "kogwistar", storage_scope: str | None = None, persistent: bool = True):
+    def __init__(self, index: Any, *, dimension: int, prefix: str = "kogwistar", storage_scope: str | None = None, persistent: bool = True, engine: Any | None = None):
         self.index = index
         self.dimension = dimension
         self.prefix = prefix
         self.uow = NoopUnitOfWork()
         self.unit_of_work = self.uow
         self.async_unit_of_work = AsyncNoopUnitOfWork()
-        self.supports_two_stage = False
-        self.two_stage_projection_capability = TwoStageProjectionCapability()
+        self.engine = engine
+        self.two_stage_projection_capability = TwoStageProjectionCapability(
+            supports_two_stage=True,
+            canonical_event_replay=True,
+            canonical_read=True,
+            stage1_strategy="none",
+            stage2_semantic_projection=True,
+            revision_gated_promotion=True,
+            semantic_readiness_gate=True,
+            delete_reconciliation=True,
+            atomic_promotion="eventual_reconcile",
+            reason="Pinecone staged sentinel row with SQL/eventual reconciliation",
+        )
+        self.two_stage_projection_adapter = _PineconeTwoStageProjectionAdapter(self) if engine is not None else None
+        self.async_two_stage_projection_adapter = _AsyncPineconeTwoStageProjectionAdapter(self) if engine is not None else None
         self._storage_scope = storage_scope or f"pinecone:{prefix}"
         self._persistent = persistent
 
@@ -146,6 +173,12 @@ class PineconeBackend:
 
     def embedding_storage_scope_aliases(self) -> tuple[str, ...]:
         return ()
+
+    def bind_engine(self, engine: Any) -> "PineconeBackend":
+        self.engine = engine
+        self.two_stage_projection_adapter = _PineconeTwoStageProjectionAdapter(self)
+        self.async_two_stage_projection_adapter = _AsyncPineconeTwoStageProjectionAdapter(self)
+        return self
 
     def inspect_embedding_storage(self) -> dict[str, Any]:
         stats = self.index.describe_index_stats()
@@ -301,3 +334,94 @@ class PineconeBackend:
                 method = name[len(key) + 1:]
                 return lambda **kwargs: getattr(self, method)(key, **kwargs)
         raise AttributeError(name)
+
+
+class _PineconeTwoStageProjectionAdapter:
+    def __init__(self, backend: PineconeBackend) -> None:
+        self.backend = backend
+
+    @property
+    def engine(self) -> Any:
+        if self.backend.engine is None:
+            raise RuntimeError("Pinecone two-stage adapter requires an engine")
+        return self.backend.engine
+
+    def _enqueue(self, *, entity_kind: str, entity_id: str, op: str) -> None:
+        indexing = getattr(self.engine, "indexing", None)
+        if indexing is None:
+            raise RuntimeError("Pinecone two-stage adapter requires engine indexing")
+        indexing.enqueue_index_job(
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            index_kind=f"{entity_kind}_embedding",
+            op=op,
+            payload_json=indexing.canonical_revision_payload(entity_kind=entity_kind, entity_id=entity_id),
+        )
+
+    def add_node(self, node: Any, *, doc_id: str | None = None) -> None:
+        if doc_id is not None:
+            node.doc_id = doc_id
+        doc, meta = self.engine.write.node_doc_and_meta(node)
+        self.backend.node_upsert(ids=[node.safe_get_id()], documents=[doc], metadatas=[meta], embeddings=[None])
+        self._enqueue(entity_kind="node", entity_id=node.safe_get_id(), op="UPSERT")
+
+    def add_edge(self, edge: Any, *, doc_id: str | None = None) -> None:
+        if doc_id is not None:
+            edge.doc_id = doc_id
+        doc = edge.model_dump_json(field_mode="backend", exclude=["embedding"])
+        meta = self.engine.write.enrich_edge_meta(edge)
+        self.backend.edge_upsert(ids=[edge.safe_get_id()], documents=[str(doc)], metadatas=[meta], embeddings=[None])
+        self._enqueue(entity_kind="edge", entity_id=edge.safe_get_id(), op="UPSERT")
+
+    def stage1_query(self, *, entity_kind: str, ids: Sequence[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        result = getattr(self.backend, f"{entity_kind}_get")(ids=ids, include=["documents", "metadatas"], limit=limit)
+        return [{"entity_id": entity_id, "document": (result.get("documents") or [None])[n], "metadata": (result.get("metadatas") or [{}])[n]} for n, entity_id in enumerate(result.get("ids", []))]
+
+    def apply_embedding_job(self, *, entity_kind: str, entity_id: str, op: str, payload_json: str | None) -> None:
+        if entity_kind not in {"node", "edge"}:
+            raise ValueError(f"unsupported two-stage entity kind: {entity_kind!r}")
+        if op.upper() == "DELETE":
+            getattr(self.backend, f"{entity_kind}_delete")(ids=[entity_id])
+            return
+        current = getattr(self.backend, f"{entity_kind}_get")(ids=[entity_id], include=["documents", "metadatas"])
+        if not current.get("ids"):
+            return
+        expected = str(json.loads(payload_json or "{}").get("source_fingerprint", ""))
+        actual = self.engine.indexing.canonical_revision_payload(entity_kind=entity_kind, entity_id=entity_id)
+        if expected and expected != str(json.loads(actual).get("source_fingerprint", "")):
+            return
+        document = (current.get("documents") or [""])[0] or ""
+        embedding = self.engine.embed.iterative_defensive_emb(str(document))
+        getattr(self.backend, f"{entity_kind}_update")(ids=[entity_id], embeddings=[embedding])
+
+    def apply_embedding_jobs_batch(self, jobs: list[Any]) -> dict[str, BaseException | None]:
+        outcomes: dict[str, BaseException | None] = {}
+        for job in jobs:
+            value = lambda name: job.get(name) if isinstance(job, dict) else getattr(job, name, None)
+            job_id = str(value("job_id") or "")
+            try:
+                self.apply_embedding_job(entity_kind=str(value("entity_kind")), entity_id=str(value("entity_id")), op=str(value("op") or "UPSERT"), payload_json=value("payload_json"))
+                outcomes[job_id] = None
+            except BaseException as exc:
+                outcomes[job_id] = exc
+        return outcomes
+
+    def reconcile_projection(self) -> int:
+        return 0
+
+
+class _AsyncPineconeTwoStageProjectionAdapter(_PineconeTwoStageProjectionAdapter):
+    async def stage1_query(self, *, entity_kind: str, ids: Sequence[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        return super().stage1_query(entity_kind=entity_kind, ids=ids, limit=limit)
+
+    async def add_node(self, node: Any, *, doc_id: str | None = None) -> None:
+        super().add_node(node, doc_id=doc_id)
+
+    async def add_edge(self, edge: Any, *, doc_id: str | None = None) -> None:
+        super().add_edge(edge, doc_id=doc_id)
+
+    async def apply_embedding_job(self, *, entity_kind: str, entity_id: str, op: str, payload_json: str | None) -> None:
+        super().apply_embedding_job(entity_kind=entity_kind, entity_id=entity_id, op=op, payload_json=payload_json)
+
+    async def apply_embedding_jobs_batch(self, jobs: list[Any]) -> dict[str, BaseException | None]:
+        return super().apply_embedding_jobs_batch(jobs)

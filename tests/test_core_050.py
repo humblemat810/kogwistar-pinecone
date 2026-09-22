@@ -1,5 +1,6 @@
 from test_contract import FakeIndex
 from kogwistar_pinecone import PineconeBackend
+import json
 
 
 def test_core_050_pending_lifecycle_and_embedding_inspector():
@@ -12,3 +13,26 @@ def test_core_050_pending_lifecycle_and_embedding_inspector():
     assert backend.node_query(query_embeddings=[[1, 0, 0]], n_results=10)["ids"] == [["ready"]]
     assert backend.embedding_storage_scope().startswith("pinecone:")
     assert backend.inspect_embedding_storage().backend_kind == "pinecone"
+
+
+def test_two_stage_same_store_promotion_is_revision_gated():
+    class Indexing:
+        def canonical_revision_payload(self, **_):
+            return json.dumps({"source_fingerprint": "v1"})
+        def enqueue_index_job(self, **_):
+            return None
+    class Embed:
+        @staticmethod
+        def iterative_defensive_emb(_text):
+            return [0.2, 0.3, 0.4]
+    class Engine:
+        indexing = Indexing()
+        embed = Embed()
+
+    backend = PineconeBackend(FakeIndex(), dimension=3, engine=Engine())
+    backend.node_upsert(ids=["n1"], documents=["doc"], metadatas=[{}], embeddings=[None])
+    assert backend.two_stage_projection_capability.is_complete()
+    backend.two_stage_projection_adapter.apply_embedding_job(entity_kind="node", entity_id="n1", op="UPSERT", payload_json=json.dumps({"source_fingerprint": "old"}))
+    assert backend.node_get(ids=["n1"], include=["embeddings"])["embeddings"] == [None]
+    backend.two_stage_projection_adapter.apply_embedding_job(entity_kind="node", entity_id="n1", op="UPSERT", payload_json=json.dumps({"source_fingerprint": "v1"}))
+    assert backend.node_get(ids=["n1"], include=["embeddings"])["embeddings"] == [[0.2, 0.3, 0.4]]
