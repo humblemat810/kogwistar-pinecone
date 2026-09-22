@@ -190,7 +190,9 @@ class PineconeBackend:
         return f"{self.prefix}:{key}"
 
     def _vector(self, vector: Sequence[float] | None) -> list[float]:
-        return list(vector) if vector is not None else [0.0] * self.dimension
+        # Pinecone SDK v7 validates dense values strictly as floats; callers
+        # commonly provide integer literals such as [1, 0, 0].
+        return [float(value) for value in vector] if vector is not None else [0.0] * self.dimension
 
     @staticmethod
     def _encode_metadata(metadata: Mapping[str, Any], document: str) -> dict[str, Any]:
