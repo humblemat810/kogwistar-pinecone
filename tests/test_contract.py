@@ -12,13 +12,31 @@ class FakeIndex:
     def fetch(self, ids, namespace):
         return {"vectors": {i: self.rows[(namespace, i)] for i in ids if (namespace, i) in self.rows}}
 
+    def fetch_by_metadata(self, filter, namespace, limit):
+        rows = [row for (ns, _), row in self.rows.items() if ns == namespace and all(row["metadata"].get(k) == v for k, v in filter.items())]
+        return {"vectors": {row["id"]: row for row in rows[:limit]}}
+
+    def describe_index_stats(self):
+        return {"namespaces": {ns: {"vector_count": sum(1 for current, _ in self.rows if current == ns)} for ns, _ in self.rows}}
+
     def query(self, vector, top_k, namespace, filter=None, include_metadata=True, include_values=False):
         matches = []
         for (ns, id_), row in self.rows.items():
             if ns != namespace:
                 continue
-            if filter and row["metadata"].get("doc_id") != filter.get("doc_id"):
-                continue
+            if filter:
+                valid = True
+                for key, expected in filter.items():
+                    actual = row["metadata"].get(key)
+                    if isinstance(expected, dict):
+                        if "$ne" in expected and actual == expected["$ne"]:
+                            valid = False
+                        if "$eq" in expected and actual != expected["$eq"]:
+                            valid = False
+                    elif actual != expected:
+                        valid = False
+                if not valid:
+                    continue
             score = sum(a * b for a, b in zip(vector, row["values"]))
             matches.append({"id": id_, "score": score, "metadata": row["metadata"], "values": row["values"]})
         return {"matches": sorted(matches, key=lambda x: x["score"], reverse=True)[:top_k]}
