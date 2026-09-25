@@ -3,6 +3,8 @@ on: [push, pull_request]
 jobs:
   contract:
     runs-on: ubuntu-latest
+    env:
+      KOGWISTAR_REVISION: ae24e1663a66deb0e65d6e2bf74a2e5ef317e1ea
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -25,8 +27,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e ".[test,core]"
+      - run: python -m pip install -e ".[test]"
         if: matrix.is_pypy == false
+      - name: Install Kogwistar 0.6 contract revision
+        if: matrix.is_pypy == false
+        run: python -m pip install "git+https://github.com/humblemat810/kogwistar.git@${{ env.KOGWISTAR_REVISION }}"
       - run: python -m pip install --upgrade pip setuptools wheel pytest
         if: matrix.is_pypy
       - run: python -m pytest -vv -ra --tb=long --junitxml=pytest-${{ matrix.python-version }}.xml
