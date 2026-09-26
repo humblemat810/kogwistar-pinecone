@@ -1,9 +1,11 @@
 from test_contract import FakeIndex
 from kogwistar_pinecone import PineconeBackend
+from kogwistar.engine_core.embedding_profile import EmbeddingStorageState
+from kogwistar.engine_core.storage_backend import TwoStageProjectionCapability
 import json
 
 
-def test_core_050_pending_lifecycle_and_embedding_inspector():
+def test_core_060_pending_lifecycle_and_embedding_inspector():
     backend = PineconeBackend(FakeIndex(), dimension=3)
     backend.node_add(ids=["pending", "ready"], documents=["p", "r"], metadatas=[{"kind": "p"}, {"kind": "r"}], embeddings=[None, [1, 0, 0]])
     backend.node_update(ids=["pending"], metadatas=[{"lifecycle_status": "tombstoned"}])
@@ -12,7 +14,11 @@ def test_core_050_pending_lifecycle_and_embedding_inspector():
     assert stored["metadatas"][0]["lifecycle_status"] == "tombstoned"
     assert backend.node_query(query_embeddings=[[1, 0, 0]], n_results=10)["ids"] == [["ready"]]
     assert backend.embedding_storage_scope().startswith("pinecone:")
-    assert backend.inspect_embedding_storage().backend_kind == "pinecone"
+    storage = backend.inspect_embedding_storage()
+    assert isinstance(storage, EmbeddingStorageState)
+    assert storage.backend_kind == "pinecone"
+    assert isinstance(backend.two_stage_projection_capability, TwoStageProjectionCapability)
+    assert backend.two_stage_projection_capability.atomic_promotion == "eventual_reconcile"
 
 
 def test_two_stage_same_store_promotion_is_revision_gated():
